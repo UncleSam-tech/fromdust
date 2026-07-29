@@ -17,14 +17,3 @@ Football is the deepest profession, but the simulation treats the protagonist as
 ## Current scope
 
 The active build contains character creation, grassroots and academy pathways, established-career entry, contextual football decisions, detailed contracts, agents, club interest, league tables, continental competitions, awards, records, news, education, relationships, finances, beliefs, citizenship, passports, travel, retirement and dynasty continuation.
-
-## Thirty-day public build
-
-This repository is being assembled through thirty small, reviewed releases. Each day adds one coherent, tested portion of the game. Generated saves, credentials, local-machine data, signing materials and non-redistributable third-party databases are never committed.
-
-See [30-DAY-ROADMAP.md](./30-DAY-ROADMAP.md) for the release sequence and [SECURITY.md](./SECURITY.md) for the publication policy.
-
-## Status
-
-Day 1 establishes the public product foundation, release boundaries and security rules. Source systems follow in dependency order so that every published slice is understandable and buildable.
-
