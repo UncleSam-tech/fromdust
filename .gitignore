@@ -1,0 +1,46 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
+credentials.*
+secrets.*
+
+# Game saves and local databases
+*.sqlite
+*.sqlite3
+*.db
+*.save
+saves/
+backups/
+
+# macOS and editor state
+.DS_Store
+*.xcuserstate
+xcuserdata/
+.idea/
+.vscode/
+
+# Rust, Node and generated output
+target/
+node_modules/
+dist/
+coverage/
+*.log
+*.dSYM/
+
+# Local packaging and signing
+*.app/
+*.dmg
+*.pkg
+release-private/
+
+# Imported data must be reviewed before publication
+private-data/
+licensed-data/
+player-databases/
+
