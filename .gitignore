@@ -18,10 +18,13 @@ secrets.*
 saves/
 backups/
 
-# macOS and editor state
+# macOS, Xcode and editor state
 .DS_Store
 *.xcuserstate
 xcuserdata/
+DerivedData/
+*.xcarchive
+.swiftpm/
 .idea/
 .vscode/
 
@@ -29,6 +32,7 @@ xcuserdata/
 target/
 node_modules/
 dist/
+build/
 coverage/
 *.log
 *.dSYM/
@@ -43,4 +47,3 @@ release-private/
 private-data/
 licensed-data/
 player-databases/
-
