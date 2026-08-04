@@ -7,6 +7,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "FromTheDustCore", targets: ["FromTheDustCore"]),
+        .executable(name: "FromTheDustCoreChecks", targets: ["FromTheDustCoreChecks"]),
     ],
     targets: [
         .target(
@@ -15,8 +16,8 @@ let package = Package(
             exclude: ["FromTheDustCoreTests.swift"],
             sources: ["FromTheDustCore.swift"]
         ),
-        .testTarget(
-            name: "FromTheDustCoreTests",
+        .executableTarget(
+            name: "FromTheDustCoreChecks",
             dependencies: ["FromTheDustCore"],
             path: ".",
             exclude: ["FromTheDustCore.swift"],

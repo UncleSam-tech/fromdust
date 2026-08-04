@@ -190,3 +190,93 @@ public struct Person: Identifiable, Codable, Hashable, Sendable {
         }
     }
 }
+
+public enum NewLifeError: Error, Equatable, Sendable {
+    case startsBeforeBirth(start: SimulationDate, birth: SimulationDate)
+}
+
+/// The player-selected facts required to begin a life.
+///
+/// Date of birth is captured as a complete calendar date. Age is deliberately
+/// omitted because it is derived from that date and the simulation clock.
+public struct NewLifeDraft: Codable, Hashable, Sendable {
+    public let personID: PersonID
+    public var name: PersonName
+    public let dateOfBirth: SimulationDate
+    public let startingDate: SimulationDate
+
+    public init(
+        personID: PersonID,
+        name: PersonName,
+        dateOfBirth: SimulationDate,
+        startingDate: SimulationDate
+    ) {
+        self.personID = personID
+        self.name = name
+        self.dateOfBirth = dateOfBirth
+        self.startingDate = startingDate
+    }
+
+    public func create() throws -> NewLife {
+        guard startingDate >= dateOfBirth else {
+            throw NewLifeError.startsBeforeBirth(
+                start: startingDate,
+                birth: dateOfBirth
+            )
+        }
+
+        return NewLife(
+            protagonist: Person(
+                id: personID,
+                name: name,
+                dateOfBirth: dateOfBirth
+            ),
+            clock: SimulationClock(startingOn: startingDate)
+        )
+    }
+}
+
+/// A newly-created playable life with one authoritative person and clock.
+public struct NewLife: Codable, Hashable, Sendable {
+    public let protagonist: Person
+    public private(set) var clock: SimulationClock
+
+    private enum CodingKeys: String, CodingKey {
+        case protagonist
+        case clock
+    }
+
+    fileprivate init(protagonist: Person, clock: SimulationClock) {
+        self.protagonist = protagonist
+        self.clock = clock
+    }
+
+    public var age: Int {
+        let date = clock.currentDate
+        let birth = protagonist.dateOfBirth
+        let birthdayHasOccurred = (date.month, date.day) >= (birth.month, birth.day)
+        return date.year - birth.year - (birthdayHasOccurred ? 0 : 1)
+    }
+
+    @discardableResult
+    public mutating func advance(by days: Int = 1) throws -> SimulationDate {
+        try clock.advance(by: days)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let protagonist = try container.decode(Person.self, forKey: .protagonist)
+        let clock = try container.decode(SimulationClock.self, forKey: .clock)
+
+        guard clock.currentDate >= protagonist.dateOfBirth else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .clock,
+                in: container,
+                debugDescription: "A new life's clock cannot precede its date of birth."
+            )
+        }
+
+        self.protagonist = protagonist
+        self.clock = clock
+    }
+}
