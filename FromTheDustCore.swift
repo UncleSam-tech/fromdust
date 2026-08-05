@@ -191,6 +191,239 @@ public struct Person: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+public struct HouseholdID: RawRepresentable, Codable, Hashable, Sendable {
+    public let rawValue: String
+
+    public init?(rawValue: String) {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        self.rawValue = value
+    }
+}
+
+public enum HouseholdRole: String, Codable, CaseIterable, Sendable {
+    case protagonist
+    case guardian
+    case sibling
+    case relative
+}
+
+public struct HouseholdMember: Codable, Hashable, Sendable {
+    public let person: Person
+    public let role: HouseholdRole
+
+    public init(person: Person, role: HouseholdRole) {
+        self.person = person
+        self.role = role
+    }
+}
+
+public enum HouseholdError: Error, Equatable, Sendable {
+    case duplicateMember(PersonID)
+    case missingProtagonist(PersonID)
+    case protagonistRoleMustBeUnique
+    case missingAdultGuardian
+    case memberBornAfterStart(PersonID)
+    case scoreOutsideRange(Int)
+}
+
+/// The household conditions directly affected by early-life decisions.
+///
+/// Values are bounded summaries rather than personality attributes. They record
+/// the current capacity of the home, not a judgement about a family structure.
+public struct HouseholdSupport: Codable, Hashable, Sendable {
+    public let stability: Int
+    public let connection: Int
+    public let availableResources: Int
+
+    public init(stability: Int, connection: Int, availableResources: Int) throws {
+        for score in [stability, connection, availableResources] {
+            guard (0...100).contains(score) else {
+                throw HouseholdError.scoreOutsideRange(score)
+            }
+        }
+        self.stability = stability
+        self.connection = connection
+        self.availableResources = availableResources
+    }
+
+    fileprivate func applying(_ impact: ChildhoodImpact) -> Self {
+        Self(
+            boundedStability: Self.clamp(stability + impact.stability),
+            boundedConnection: Self.clamp(connection + impact.connection),
+            boundedAvailableResources: Self.clamp(availableResources + impact.availableResources)
+        )
+    }
+
+    private init(
+        boundedStability: Int,
+        boundedConnection: Int,
+        boundedAvailableResources: Int
+    ) {
+        stability = boundedStability
+        connection = boundedConnection
+        availableResources = boundedAvailableResources
+    }
+
+    private static func clamp(_ value: Int) -> Int {
+        min(100, max(0, value))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case stability
+        case connection
+        case availableResources
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let stability = try container.decode(Int.self, forKey: .stability)
+        let connection = try container.decode(Int.self, forKey: .connection)
+        let availableResources = try container.decode(Int.self, forKey: .availableResources)
+
+        do {
+            try self.init(
+                stability: stability,
+                connection: connection,
+                availableResources: availableResources
+            )
+        } catch {
+            throw DecodingError.dataCorruptedError(
+                forKey: .stability,
+                in: container,
+                debugDescription: "Household support scores must be between 0 and 100."
+            )
+        }
+    }
+}
+
+public struct HouseholdDraft: Codable, Hashable, Sendable {
+    public let id: HouseholdID
+    public var members: [HouseholdMember]
+    public var startingSupport: HouseholdSupport
+
+    public init(
+        id: HouseholdID,
+        members: [HouseholdMember],
+        startingSupport: HouseholdSupport
+    ) {
+        self.id = id
+        self.members = members
+        self.startingSupport = startingSupport
+    }
+
+    public func create(protagonist: Person, on date: SimulationDate) throws -> Household {
+        try Household.validate(members: members, protagonist: protagonist, on: date)
+        return Household(id: id, members: members, support: startingSupport)
+    }
+}
+
+public struct Household: Codable, Hashable, Sendable {
+    public let id: HouseholdID
+    public let members: [HouseholdMember]
+    public fileprivate(set) var support: HouseholdSupport
+
+    fileprivate init(id: HouseholdID, members: [HouseholdMember], support: HouseholdSupport) {
+        self.id = id
+        self.members = members
+        self.support = support
+    }
+
+    fileprivate static func validate(
+        members: [HouseholdMember],
+        protagonist: Person,
+        on date: SimulationDate
+    ) throws {
+        var personIDs = Set<PersonID>()
+        for member in members {
+            guard personIDs.insert(member.person.id).inserted else {
+                throw HouseholdError.duplicateMember(member.person.id)
+            }
+            guard member.person.dateOfBirth <= date else {
+                throw HouseholdError.memberBornAfterStart(member.person.id)
+            }
+        }
+
+        let protagonistMembers = members.filter { $0.role == .protagonist }
+        guard protagonistMembers.count == 1 else {
+            throw HouseholdError.protagonistRoleMustBeUnique
+        }
+        guard protagonistMembers[0].person == protagonist else {
+            throw HouseholdError.missingProtagonist(protagonist.id)
+        }
+
+        let hasAdultGuardian = try members.contains { member in
+            guard member.role == .guardian else { return false }
+            return try member.person.age(on: date) >= 18
+        }
+        guard hasAdultGuardian else {
+            throw HouseholdError.missingAdultGuardian
+        }
+    }
+
+    fileprivate mutating func apply(_ impact: ChildhoodImpact) {
+        support = support.applying(impact)
+    }
+}
+
+public struct ChildhoodDecisionID: RawRepresentable, Codable, Hashable, Sendable {
+    public let rawValue: String
+
+    public init?(rawValue: String) {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        self.rawValue = value
+    }
+}
+
+public enum ChildhoodChoice: String, Codable, CaseIterable, Sendable {
+    case shareResponsibilities
+    case keepASteadyRoutine
+    case joinACommunityActivity
+    case protectQuietTime
+
+    fileprivate var impact: ChildhoodImpact {
+        switch self {
+        case .shareResponsibilities:
+            return ChildhoodImpact(stability: 3, connection: 5, availableResources: -1)
+        case .keepASteadyRoutine:
+            return ChildhoodImpact(stability: 5, connection: 2, availableResources: -1)
+        case .joinACommunityActivity:
+            return ChildhoodImpact(stability: 1, connection: 4, availableResources: -3)
+        case .protectQuietTime:
+            return ChildhoodImpact(stability: 2, connection: 1, availableResources: 1)
+        }
+    }
+}
+
+public struct ChildhoodImpact: Codable, Hashable, Sendable {
+    public let stability: Int
+    public let connection: Int
+    public let availableResources: Int
+
+    fileprivate init(stability: Int, connection: Int, availableResources: Int) {
+        self.stability = stability
+        self.connection = connection
+        self.availableResources = availableResources
+    }
+}
+
+/// An inspectable, append-only explanation of one early-life choice.
+public struct ChildhoodDecision: Codable, Hashable, Sendable {
+    public let id: ChildhoodDecisionID
+    public let date: SimulationDate
+    public let choice: ChildhoodChoice
+    public let impact: ChildhoodImpact
+    public let supportBefore: HouseholdSupport
+    public let supportAfter: HouseholdSupport
+}
+
+public enum ChildhoodDecisionError: Error, Equatable, Sendable {
+    case requiresChildhood(currentStage: LifeStage)
+    case duplicateID(ChildhoodDecisionID)
+    case decisionAlreadyRecorded(on: SimulationDate)
+}
+
 public enum NewLifeError: Error, Equatable, Sendable {
     case startsBeforeBirth(start: SimulationDate, birth: SimulationDate)
 }
@@ -204,17 +437,20 @@ public struct NewLifeDraft: Codable, Hashable, Sendable {
     public var name: PersonName
     public let dateOfBirth: SimulationDate
     public let startingDate: SimulationDate
+    public var household: HouseholdDraft
 
     public init(
         personID: PersonID,
         name: PersonName,
         dateOfBirth: SimulationDate,
-        startingDate: SimulationDate
+        startingDate: SimulationDate,
+        household: HouseholdDraft
     ) {
         self.personID = personID
         self.name = name
         self.dateOfBirth = dateOfBirth
         self.startingDate = startingDate
+        self.household = household
     }
 
     public func create() throws -> NewLife {
@@ -225,13 +461,14 @@ public struct NewLifeDraft: Codable, Hashable, Sendable {
             )
         }
 
+        let protagonist = Person(id: personID, name: name, dateOfBirth: dateOfBirth)
+        let household = try household.create(protagonist: protagonist, on: startingDate)
+
         return NewLife(
-            protagonist: Person(
-                id: personID,
-                name: name,
-                dateOfBirth: dateOfBirth
-            ),
-            clock: SimulationClock(startingOn: startingDate)
+            protagonist: protagonist,
+            clock: SimulationClock(startingOn: startingDate),
+            household: household,
+            childhoodDecisions: []
         )
     }
 }
@@ -240,15 +477,26 @@ public struct NewLifeDraft: Codable, Hashable, Sendable {
 public struct NewLife: Codable, Hashable, Sendable {
     public let protagonist: Person
     public private(set) var clock: SimulationClock
+    public private(set) var household: Household
+    public private(set) var childhoodDecisions: [ChildhoodDecision]
 
     private enum CodingKeys: String, CodingKey {
         case protagonist
         case clock
+        case household
+        case childhoodDecisions
     }
 
-    fileprivate init(protagonist: Person, clock: SimulationClock) {
+    fileprivate init(
+        protagonist: Person,
+        clock: SimulationClock,
+        household: Household,
+        childhoodDecisions: [ChildhoodDecision]
+    ) {
         self.protagonist = protagonist
         self.clock = clock
+        self.household = household
+        self.childhoodDecisions = childhoodDecisions
     }
 
     public var age: Int {
@@ -263,10 +511,46 @@ public struct NewLife: Codable, Hashable, Sendable {
         try clock.advance(by: days)
     }
 
+    @discardableResult
+    public mutating func recordChildhoodDecision(
+        id: ChildhoodDecisionID,
+        choice: ChildhoodChoice
+    ) throws -> ChildhoodDecision {
+        let stage = try protagonist.lifeStage(on: clock.currentDate)
+        guard stage == .childhood else {
+            throw ChildhoodDecisionError.requiresChildhood(currentStage: stage)
+        }
+        guard !childhoodDecisions.contains(where: { $0.id == id }) else {
+            throw ChildhoodDecisionError.duplicateID(id)
+        }
+        guard !childhoodDecisions.contains(where: { $0.date == clock.currentDate }) else {
+            throw ChildhoodDecisionError.decisionAlreadyRecorded(on: clock.currentDate)
+        }
+
+        let before = household.support
+        let impact = choice.impact
+        household.apply(impact)
+        let decision = ChildhoodDecision(
+            id: id,
+            date: clock.currentDate,
+            choice: choice,
+            impact: impact,
+            supportBefore: before,
+            supportAfter: household.support
+        )
+        childhoodDecisions.append(decision)
+        return decision
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let protagonist = try container.decode(Person.self, forKey: .protagonist)
         let clock = try container.decode(SimulationClock.self, forKey: .clock)
+        let household = try container.decode(Household.self, forKey: .household)
+        let childhoodDecisions = try container.decode(
+            [ChildhoodDecision].self,
+            forKey: .childhoodDecisions
+        )
 
         guard clock.currentDate >= protagonist.dateOfBirth else {
             throw DecodingError.dataCorruptedError(
@@ -276,7 +560,74 @@ public struct NewLife: Codable, Hashable, Sendable {
             )
         }
 
+
+        do {
+            try Household.validate(
+                members: household.members,
+                protagonist: protagonist,
+                on: clock.currentDate
+            )
+            try Self.validate(
+                childhoodDecisions: childhoodDecisions,
+                protagonist: protagonist,
+                clock: clock,
+                household: household
+            )
+        } catch {
+            throw DecodingError.dataCorruptedError(
+                forKey: .household,
+                in: container,
+                debugDescription: "The household or its childhood decision history is inconsistent."
+            )
+        }
+
         self.protagonist = protagonist
         self.clock = clock
+        self.household = household
+        self.childhoodDecisions = childhoodDecisions
+    }
+
+    private static func validate(
+        childhoodDecisions: [ChildhoodDecision],
+        protagonist: Person,
+        clock: SimulationClock,
+        household: Household
+    ) throws {
+        var ids = Set<ChildhoodDecisionID>()
+        var dates = Set<SimulationDate>()
+        var previousSupport: HouseholdSupport?
+        var previousDate: SimulationDate?
+
+        for decision in childhoodDecisions {
+            guard ids.insert(decision.id).inserted else {
+                throw ChildhoodDecisionError.duplicateID(decision.id)
+            }
+            guard dates.insert(decision.date).inserted else {
+                throw ChildhoodDecisionError.decisionAlreadyRecorded(on: decision.date)
+            }
+            guard
+                decision.date >= protagonist.dateOfBirth,
+                decision.date <= clock.currentDate,
+                try protagonist.lifeStage(on: decision.date) == .childhood,
+                decision.impact == decision.choice.impact,
+                decision.supportAfter == decision.supportBefore.applying(decision.impact),
+                previousSupport == nil || previousSupport == decision.supportBefore,
+                previousDate == nil || previousDate! < decision.date
+            else {
+                throw ChildhoodDecisionError.requiresChildhood(
+                    currentStage: try protagonist.lifeStage(on: clock.currentDate)
+                )
+            }
+            previousSupport = decision.supportAfter
+            previousDate = decision.date
+        }
+
+        if let previousSupport {
+            guard previousSupport == household.support else {
+                throw ChildhoodDecisionError.requiresChildhood(
+                    currentStage: try protagonist.lifeStage(on: clock.currentDate)
+                )
+            }
+        }
     }
 }

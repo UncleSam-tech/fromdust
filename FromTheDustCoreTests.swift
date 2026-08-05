@@ -15,6 +15,11 @@ struct FromTheDustCoreChecks {
         try newLifeRejectsAStartBeforeBirth()
         try newLifeRoundTripsWithoutStoredAge()
         try decodedNewLifeRejectsAClockBeforeBirth()
+        try householdRequiresOneProtagonistAndAnAdultGuardian()
+        try childhoodDecisionRecordsItsHouseholdEffect()
+        try childhoodAllowsOnlyOneDecisionPerDate()
+        try childhoodDecisionIsRejectedAfterChildhood()
+        try childhoodHistoryRoundTripsThroughJSON()
 
         print("PASS: FromTheDustCore checks")
     }
@@ -152,7 +157,30 @@ struct FromTheDustCoreChecks {
           "clock": {
             "currentDate": { "year": 2026, "month": 8, "day": 2 },
             "elapsedDays": 0
-          }
+          },
+          "household": {
+            "id": "household-001",
+            "members": [
+              {
+                "person": {
+                  "id": "player-001",
+                  "name": { "given": "Ada", "family": "Okafor" },
+                  "dateOfBirth": { "year": 2026, "month": 8, "day": 3 }
+                },
+                "role": "protagonist"
+              },
+              {
+                "person": {
+                  "id": "guardian-001",
+                  "name": { "given": "Nneka", "family": "Okafor" },
+                  "dateOfBirth": { "year": 1990, "month": 4, "day": 9 }
+                },
+                "role": "guardian"
+              }
+            ],
+            "support": { "stability": 50, "connection": 50, "availableResources": 50 }
+          },
+          "childhoodDecisions": []
         }
         """
 
@@ -161,6 +189,107 @@ struct FromTheDustCoreChecks {
             preconditionFailure("An invalid playable-life save was decoded")
         } catch DecodingError.dataCorrupted {
         }
+    }
+
+    private static func householdRequiresOneProtagonistAndAnAdultGuardian() throws {
+        let protagonist = try makePerson(born: (2015, 8, 5))
+        let start = try SimulationDate(year: 2026, month: 8, day: 5)
+        let support = try HouseholdSupport(
+            stability: 50,
+            connection: 50,
+            availableResources: 50
+        )
+        let draft = HouseholdDraft(
+            id: HouseholdID(rawValue: "household-001")!,
+            members: [HouseholdMember(person: protagonist, role: .protagonist)],
+            startingSupport: support
+        )
+
+        do {
+            _ = try draft.create(protagonist: protagonist, on: start)
+            preconditionFailure("A household without an adult guardian was accepted")
+        } catch HouseholdError.missingAdultGuardian {
+        }
+    }
+
+    private static func childhoodDecisionRecordsItsHouseholdEffect() throws {
+        var life = try makeDraft(
+            born: (2015, 8, 5),
+            starting: (2026, 8, 5)
+        ).create()
+        let decision = try life.recordChildhoodDecision(
+            id: ChildhoodDecisionID(rawValue: "choice-001")!,
+            choice: .shareResponsibilities
+        )
+
+        precondition(decision.date == life.clock.currentDate)
+        precondition(decision.supportBefore.stability == 50)
+        precondition(decision.supportAfter.stability == 53)
+        precondition(decision.supportAfter.connection == 55)
+        precondition(decision.supportAfter.availableResources == 49)
+        precondition(life.household.support == decision.supportAfter)
+        precondition(life.childhoodDecisions == [decision])
+    }
+
+    private static func childhoodAllowsOnlyOneDecisionPerDate() throws {
+        var life = try makeDraft(
+            born: (2015, 8, 5),
+            starting: (2026, 8, 5)
+        ).create()
+        try life.recordChildhoodDecision(
+            id: ChildhoodDecisionID(rawValue: "choice-001")!,
+            choice: .keepASteadyRoutine
+        )
+
+        do {
+            try life.recordChildhoodDecision(
+                id: ChildhoodDecisionID(rawValue: "choice-002")!,
+                choice: .protectQuietTime
+            )
+            preconditionFailure("Two childhood decisions were recorded on one date")
+        } catch ChildhoodDecisionError.decisionAlreadyRecorded(on: life.clock.currentDate) {
+        }
+    }
+
+    private static func childhoodDecisionIsRejectedAfterChildhood() throws {
+        var life = try makeDraft(
+            born: (2010, 8, 5),
+            starting: (2026, 8, 5)
+        ).create()
+
+        do {
+            try life.recordChildhoodDecision(
+                id: ChildhoodDecisionID(rawValue: "choice-001")!,
+                choice: .joinACommunityActivity
+            )
+            preconditionFailure("A childhood decision was recorded during adolescence")
+        } catch ChildhoodDecisionError.requiresChildhood(currentStage: .adolescence) {
+        }
+    }
+
+    private static func childhoodHistoryRoundTripsThroughJSON() throws {
+        var original = try makeDraft(
+            born: (2015, 8, 5),
+            starting: (2026, 8, 5)
+        ).create()
+        try original.recordChildhoodDecision(
+            id: ChildhoodDecisionID(rawValue: "choice-001")!,
+            choice: .joinACommunityActivity
+        )
+        try original.advance()
+        try original.recordChildhoodDecision(
+            id: ChildhoodDecisionID(rawValue: "choice-002")!,
+            choice: .protectQuietTime
+        )
+
+        let data = try JSONEncoder().encode(original)
+        let restored = try JSONDecoder().decode(NewLife.self, from: data)
+
+        precondition(restored == original)
+        precondition(restored.childhoodDecisions.count == 2)
+        precondition(restored.household.support.stability == 53)
+        precondition(restored.household.support.connection == 55)
+        precondition(restored.household.support.availableResources == 48)
     }
 
     private static func makePerson(born birth: (Int, Int, Int)) throws -> Person {
@@ -179,18 +308,41 @@ struct FromTheDustCoreChecks {
         born birth: (Int, Int, Int),
         starting start: (Int, Int, Int)
     ) throws -> NewLifeDraft {
-        NewLifeDraft(
-            personID: PersonID(rawValue: "player-001")!,
+        let protagonist = Person(
+            id: PersonID(rawValue: "player-001")!,
             name: try PersonName(given: "Ada", family: "Okafor"),
             dateOfBirth: try SimulationDate(
                 year: birth.0,
                 month: birth.1,
                 day: birth.2
-            ),
+            )
+        )
+        let guardian = Person(
+            id: PersonID(rawValue: "guardian-001")!,
+            name: try PersonName(given: "Nneka", family: "Okafor"),
+            dateOfBirth: try SimulationDate(year: 1984, month: 4, day: 9)
+        )
+
+        return NewLifeDraft(
+            personID: protagonist.id,
+            name: protagonist.name,
+            dateOfBirth: protagonist.dateOfBirth,
             startingDate: try SimulationDate(
                 year: start.0,
                 month: start.1,
                 day: start.2
+            ),
+            household: HouseholdDraft(
+                id: HouseholdID(rawValue: "household-001")!,
+                members: [
+                    HouseholdMember(person: protagonist, role: .protagonist),
+                    HouseholdMember(person: guardian, role: .guardian),
+                ],
+                startingSupport: try HouseholdSupport(
+                    stability: 50,
+                    connection: 50,
+                    availableResources: 50
+                )
             )
         )
     }
