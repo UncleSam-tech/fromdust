@@ -424,6 +424,198 @@ public enum ChildhoodDecisionError: Error, Equatable, Sendable {
     case decisionAlreadyRecorded(on: SimulationDate)
 }
 
+public struct GrassrootsProgrammeID: RawRepresentable, Codable, Hashable, Sendable {
+    public let rawValue: String
+
+    public init?(rawValue: String) {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        self.rawValue = value
+    }
+}
+
+public enum GrassrootsActivity: String, Codable, CaseIterable, Sendable {
+    case communityTraining
+    case schoolFootball
+    case openPlay
+}
+
+public enum GrassrootsError: Error, Equatable, Sendable {
+    case incompleteProgrammeName
+    case invalidParticipantCapacity(Int)
+    case invalidCoachRatio(Int)
+    case invalidAgeRange(minimum: Int, maximum: Int)
+    case insufficientScreenedCoaches(required: Int, available: Int)
+    case alreadyEnrolled(GrassrootsProgrammeID)
+    case ageOutsideProgrammeRange(age: Int, minimum: Int, maximum: Int)
+    case guardianConsentRequired(PersonID)
+    case noGrassrootsEnrollment
+    case duplicateSessionID(GrassrootsSessionID)
+    case sessionAlreadyRecorded(on: SimulationDate)
+    case sessionBeforeEnrollment
+    case participantCountOutsideCapacity(Int)
+    case invalidSessionDuration(Int)
+    case safeguardingLeadRequired
+}
+
+/// Minimum, explicit safety requirements for a youth football programme.
+public struct SafeguardingPolicy: Codable, Hashable, Sendable {
+    public let minimumParticipantAge: Int
+    public let maximumParticipantAge: Int
+    public let maxParticipantsPerScreenedCoach: Int
+
+    public init(
+        minimumParticipantAge: Int = 5,
+        maximumParticipantAge: Int = 17,
+        maxParticipantsPerScreenedCoach: Int = 12
+    ) throws {
+        guard
+            minimumParticipantAge >= 0,
+            maximumParticipantAge <= 17,
+            minimumParticipantAge <= maximumParticipantAge
+        else {
+            throw GrassrootsError.invalidAgeRange(
+                minimum: minimumParticipantAge,
+                maximum: maximumParticipantAge
+            )
+        }
+        guard (1...16).contains(maxParticipantsPerScreenedCoach) else {
+            throw GrassrootsError.invalidCoachRatio(maxParticipantsPerScreenedCoach)
+        }
+
+        self.minimumParticipantAge = minimumParticipantAge
+        self.maximumParticipantAge = maximumParticipantAge
+        self.maxParticipantsPerScreenedCoach = maxParticipantsPerScreenedCoach
+    }
+
+    fileprivate func requiredCoachCount(for participants: Int) -> Int {
+        (participants + maxParticipantsPerScreenedCoach - 1)
+            / maxParticipantsPerScreenedCoach
+    }
+}
+
+public struct GrassrootsProgrammeDraft: Codable, Hashable, Sendable {
+    public let id: GrassrootsProgrammeID
+    public var name: String
+    public let activity: GrassrootsActivity
+    public var participantCapacity: Int
+    public var screenedCoachCount: Int
+    public var safeguarding: SafeguardingPolicy
+
+    public init(
+        id: GrassrootsProgrammeID,
+        name: String,
+        activity: GrassrootsActivity,
+        participantCapacity: Int,
+        screenedCoachCount: Int,
+        safeguarding: SafeguardingPolicy
+    ) {
+        self.id = id
+        self.name = name
+        self.activity = activity
+        self.participantCapacity = participantCapacity
+        self.screenedCoachCount = screenedCoachCount
+        self.safeguarding = safeguarding
+    }
+
+    public func create() throws -> GrassrootsProgramme {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeguarding = try SafeguardingPolicy(
+            minimumParticipantAge: safeguarding.minimumParticipantAge,
+            maximumParticipantAge: safeguarding.maximumParticipantAge,
+            maxParticipantsPerScreenedCoach: safeguarding.maxParticipantsPerScreenedCoach
+        )
+        guard !name.isEmpty else {
+            throw GrassrootsError.incompleteProgrammeName
+        }
+        guard participantCapacity > 0 else {
+            throw GrassrootsError.invalidParticipantCapacity(participantCapacity)
+        }
+
+        let required = safeguarding.requiredCoachCount(for: participantCapacity)
+        guard screenedCoachCount >= required else {
+            throw GrassrootsError.insufficientScreenedCoaches(
+                required: required,
+                available: screenedCoachCount
+            )
+        }
+
+        return GrassrootsProgramme(
+            id: id,
+            name: name,
+            activity: activity,
+            participantCapacity: participantCapacity,
+            screenedCoachCount: screenedCoachCount,
+            safeguarding: safeguarding
+        )
+    }
+}
+
+public struct GrassrootsProgramme: Codable, Hashable, Sendable {
+    public let id: GrassrootsProgrammeID
+    public let name: String
+    public let activity: GrassrootsActivity
+    public let participantCapacity: Int
+    public let screenedCoachCount: Int
+    public let safeguarding: SafeguardingPolicy
+
+    fileprivate init(
+        id: GrassrootsProgrammeID,
+        name: String,
+        activity: GrassrootsActivity,
+        participantCapacity: Int,
+        screenedCoachCount: Int,
+        safeguarding: SafeguardingPolicy
+    ) {
+        self.id = id
+        self.name = name
+        self.activity = activity
+        self.participantCapacity = participantCapacity
+        self.screenedCoachCount = screenedCoachCount
+        self.safeguarding = safeguarding
+    }
+
+    fileprivate func validate() throws {
+        let rebuilt = try GrassrootsProgrammeDraft(
+            id: id,
+            name: name,
+            activity: activity,
+            participantCapacity: participantCapacity,
+            screenedCoachCount: screenedCoachCount,
+            safeguarding: safeguarding
+        ).create()
+        guard rebuilt == self else {
+            throw GrassrootsError.incompleteProgrammeName
+        }
+    }
+}
+
+public struct GrassrootsEnrollment: Codable, Hashable, Sendable {
+    public let programme: GrassrootsProgramme
+    public let enrolledOn: SimulationDate
+    public let consentedBy: PersonID
+}
+
+public struct GrassrootsSessionID: RawRepresentable, Codable, Hashable, Sendable {
+    public let rawValue: String
+
+    public init?(rawValue: String) {
+        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        self.rawValue = value
+    }
+}
+
+/// An auditable attendance record with the supervision facts checked at entry.
+public struct GrassrootsSession: Codable, Hashable, Sendable {
+    public let id: GrassrootsSessionID
+    public let date: SimulationDate
+    public let participantCount: Int
+    public let screenedCoachCount: Int
+    public let durationMinutes: Int
+    public let safeguardingLeadPresent: Bool
+}
+
 public enum NewLifeError: Error, Equatable, Sendable {
     case startsBeforeBirth(start: SimulationDate, birth: SimulationDate)
 }
@@ -468,7 +660,9 @@ public struct NewLifeDraft: Codable, Hashable, Sendable {
             protagonist: protagonist,
             clock: SimulationClock(startingOn: startingDate),
             household: household,
-            childhoodDecisions: []
+            childhoodDecisions: [],
+            grassrootsEnrollment: nil,
+            grassrootsSessions: []
         )
     }
 }
@@ -479,24 +673,32 @@ public struct NewLife: Codable, Hashable, Sendable {
     public private(set) var clock: SimulationClock
     public private(set) var household: Household
     public private(set) var childhoodDecisions: [ChildhoodDecision]
+    public private(set) var grassrootsEnrollment: GrassrootsEnrollment?
+    public private(set) var grassrootsSessions: [GrassrootsSession]
 
     private enum CodingKeys: String, CodingKey {
         case protagonist
         case clock
         case household
         case childhoodDecisions
+        case grassrootsEnrollment
+        case grassrootsSessions
     }
 
     fileprivate init(
         protagonist: Person,
         clock: SimulationClock,
         household: Household,
-        childhoodDecisions: [ChildhoodDecision]
+        childhoodDecisions: [ChildhoodDecision],
+        grassrootsEnrollment: GrassrootsEnrollment?,
+        grassrootsSessions: [GrassrootsSession]
     ) {
         self.protagonist = protagonist
         self.clock = clock
         self.household = household
         self.childhoodDecisions = childhoodDecisions
+        self.grassrootsEnrollment = grassrootsEnrollment
+        self.grassrootsSessions = grassrootsSessions
     }
 
     public var age: Int {
@@ -542,6 +744,71 @@ public struct NewLife: Codable, Hashable, Sendable {
         return decision
     }
 
+    @discardableResult
+    public mutating func enrollInGrassroots(
+        programme: GrassrootsProgramme,
+        consentedBy guardianID: PersonID
+    ) throws -> GrassrootsEnrollment {
+        if let grassrootsEnrollment {
+            throw GrassrootsError.alreadyEnrolled(grassrootsEnrollment.programme.id)
+        }
+
+        try programme.validate()
+        try Self.validateParticipantAge(
+            protagonist: protagonist,
+            on: clock.currentDate,
+            for: programme.safeguarding
+        )
+        try Self.validateGuardianConsent(
+            guardianID,
+            in: household,
+            on: clock.currentDate
+        )
+
+        let enrollment = GrassrootsEnrollment(
+            programme: programme,
+            enrolledOn: clock.currentDate,
+            consentedBy: guardianID
+        )
+        grassrootsEnrollment = enrollment
+        return enrollment
+    }
+
+    @discardableResult
+    public mutating func recordGrassrootsSession(
+        id: GrassrootsSessionID,
+        participantCount: Int,
+        screenedCoachCount: Int,
+        durationMinutes: Int,
+        safeguardingLeadPresent: Bool
+    ) throws -> GrassrootsSession {
+        guard let enrollment = grassrootsEnrollment else {
+            throw GrassrootsError.noGrassrootsEnrollment
+        }
+        guard !grassrootsSessions.contains(where: { $0.id == id }) else {
+            throw GrassrootsError.duplicateSessionID(id)
+        }
+        guard !grassrootsSessions.contains(where: { $0.date == clock.currentDate }) else {
+            throw GrassrootsError.sessionAlreadyRecorded(on: clock.currentDate)
+        }
+
+        let session = GrassrootsSession(
+            id: id,
+            date: clock.currentDate,
+            participantCount: participantCount,
+            screenedCoachCount: screenedCoachCount,
+            durationMinutes: durationMinutes,
+            safeguardingLeadPresent: safeguardingLeadPresent
+        )
+        try Self.validate(
+            session: session,
+            enrollment: enrollment,
+            protagonist: protagonist
+        )
+        grassrootsSessions.append(session)
+        return session
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let protagonist = try container.decode(Person.self, forKey: .protagonist)
@@ -551,6 +818,14 @@ public struct NewLife: Codable, Hashable, Sendable {
             [ChildhoodDecision].self,
             forKey: .childhoodDecisions
         )
+        let grassrootsEnrollment = try container.decodeIfPresent(
+            GrassrootsEnrollment.self,
+            forKey: .grassrootsEnrollment
+        )
+        let grassrootsSessions = try container.decodeIfPresent(
+            [GrassrootsSession].self,
+            forKey: .grassrootsSessions
+        ) ?? []
 
         guard clock.currentDate >= protagonist.dateOfBirth else {
             throw DecodingError.dataCorruptedError(
@@ -573,11 +848,18 @@ public struct NewLife: Codable, Hashable, Sendable {
                 clock: clock,
                 household: household
             )
+            try Self.validate(
+                enrollment: grassrootsEnrollment,
+                sessions: grassrootsSessions,
+                protagonist: protagonist,
+                clock: clock,
+                household: household
+            )
         } catch {
             throw DecodingError.dataCorruptedError(
                 forKey: .household,
                 in: container,
-                debugDescription: "The household or its childhood decision history is inconsistent."
+                debugDescription: "The household, childhood history, or grassroots history is inconsistent."
             )
         }
 
@@ -585,6 +867,8 @@ public struct NewLife: Codable, Hashable, Sendable {
         self.clock = clock
         self.household = household
         self.childhoodDecisions = childhoodDecisions
+        self.grassrootsEnrollment = grassrootsEnrollment
+        self.grassrootsSessions = grassrootsSessions
     }
 
     private static func validate(
@@ -628,6 +912,132 @@ public struct NewLife: Codable, Hashable, Sendable {
                     currentStage: try protagonist.lifeStage(on: clock.currentDate)
                 )
             }
+        }
+    }
+
+    private static func validate(
+        enrollment: GrassrootsEnrollment?,
+        sessions: [GrassrootsSession],
+        protagonist: Person,
+        clock: SimulationClock,
+        household: Household
+    ) throws {
+        guard let enrollment else {
+            guard sessions.isEmpty else {
+                throw GrassrootsError.noGrassrootsEnrollment
+            }
+            return
+        }
+
+        try enrollment.programme.validate()
+        guard enrollment.enrolledOn <= clock.currentDate else {
+            throw GrassrootsError.sessionBeforeEnrollment
+        }
+        try validateParticipantAge(
+            protagonist: protagonist,
+            on: enrollment.enrolledOn,
+            for: enrollment.programme.safeguarding
+        )
+        try validateGuardianConsent(
+            enrollment.consentedBy,
+            in: household,
+            on: enrollment.enrolledOn
+        )
+
+        var ids = Set<GrassrootsSessionID>()
+        var dates = Set<SimulationDate>()
+        var previousDate: SimulationDate?
+        for session in sessions {
+            guard ids.insert(session.id).inserted else {
+                throw GrassrootsError.duplicateSessionID(session.id)
+            }
+            guard dates.insert(session.date).inserted else {
+                throw GrassrootsError.sessionAlreadyRecorded(on: session.date)
+            }
+            guard
+                session.date >= enrollment.enrolledOn,
+                session.date <= clock.currentDate,
+                previousDate == nil || previousDate! < session.date
+            else {
+                throw GrassrootsError.sessionBeforeEnrollment
+            }
+            try validate(
+                session: session,
+                enrollment: enrollment,
+                protagonist: protagonist
+            )
+            previousDate = session.date
+        }
+    }
+
+    private static func validate(
+        session: GrassrootsSession,
+        enrollment: GrassrootsEnrollment,
+        protagonist: Person
+    ) throws {
+        guard session.date >= enrollment.enrolledOn else {
+            throw GrassrootsError.sessionBeforeEnrollment
+        }
+        try validateParticipantAge(
+            protagonist: protagonist,
+            on: session.date,
+            for: enrollment.programme.safeguarding
+        )
+        guard
+            (1...enrollment.programme.participantCapacity)
+                .contains(session.participantCount)
+        else {
+            throw GrassrootsError.participantCountOutsideCapacity(
+                session.participantCount
+            )
+        }
+        guard (30...180).contains(session.durationMinutes) else {
+            throw GrassrootsError.invalidSessionDuration(session.durationMinutes)
+        }
+        guard session.safeguardingLeadPresent else {
+            throw GrassrootsError.safeguardingLeadRequired
+        }
+
+        let required = enrollment.programme.safeguarding
+            .requiredCoachCount(for: session.participantCount)
+        let available = min(
+            session.screenedCoachCount,
+            enrollment.programme.screenedCoachCount
+        )
+        guard session.screenedCoachCount <= enrollment.programme.screenedCoachCount,
+              available >= required else {
+            throw GrassrootsError.insufficientScreenedCoaches(
+                required: required,
+                available: available
+            )
+        }
+    }
+
+    private static func validateParticipantAge(
+        protagonist: Person,
+        on date: SimulationDate,
+        for policy: SafeguardingPolicy
+    ) throws {
+        let age = try protagonist.age(on: date)
+        guard (policy.minimumParticipantAge...policy.maximumParticipantAge).contains(age) else {
+            throw GrassrootsError.ageOutsideProgrammeRange(
+                age: age,
+                minimum: policy.minimumParticipantAge,
+                maximum: policy.maximumParticipantAge
+            )
+        }
+    }
+
+    private static func validateGuardianConsent(
+        _ guardianID: PersonID,
+        in household: Household,
+        on date: SimulationDate
+    ) throws {
+        let guardian = household.members.first {
+            $0.person.id == guardianID && $0.role == .guardian
+        }
+        guard let guardian, try guardian.person.age(on: date) >= 18 else {
+            throw GrassrootsError.guardianConsentRequired(guardianID)
         }
     }
 }

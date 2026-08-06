@@ -20,6 +20,11 @@ struct FromTheDustCoreChecks {
         try childhoodAllowsOnlyOneDecisionPerDate()
         try childhoodDecisionIsRejectedAfterChildhood()
         try childhoodHistoryRoundTripsThroughJSON()
+        try grassrootsProgrammeRequiresEnoughScreenedCoaches()
+        try grassrootsEnrollmentRequiresHouseholdGuardianConsent()
+        try grassrootsEnrollmentRespectsProgrammeAgeRange()
+        try grassrootsSessionEnforcesSafeguarding()
+        try grassrootsParticipationRoundTripsThroughJSON()
 
         print("PASS: FromTheDustCore checks")
     }
@@ -290,6 +295,191 @@ struct FromTheDustCoreChecks {
         precondition(restored.household.support.stability == 53)
         precondition(restored.household.support.connection == 55)
         precondition(restored.household.support.availableResources == 48)
+    }
+
+    private static func grassrootsProgrammeRequiresEnoughScreenedCoaches() throws {
+        let safeguarding = try SafeguardingPolicy(
+            maxParticipantsPerScreenedCoach: 10
+        )
+        let draft = GrassrootsProgrammeDraft(
+            id: GrassrootsProgrammeID(rawValue: "programme-001")!,
+            name: "Community Football",
+            activity: .communityTraining,
+            participantCapacity: 24,
+            screenedCoachCount: 2,
+            safeguarding: safeguarding
+        )
+
+        do {
+            _ = try draft.create()
+            preconditionFailure("An under-supervised programme was accepted")
+        } catch GrassrootsError.insufficientScreenedCoaches(
+            required: 3,
+            available: 2
+        ) {
+        }
+    }
+
+    private static func grassrootsEnrollmentRequiresHouseholdGuardianConsent() throws {
+        var life = try makeDraft(
+            born: (2015, 8, 6),
+            starting: (2026, 8, 6)
+        ).create()
+        let programme = try makeProgramme()
+        let unknownGuardian = PersonID(rawValue: "guardian-not-in-household")!
+
+        do {
+            try life.enrollInGrassroots(
+                programme: programme,
+                consentedBy: unknownGuardian
+            )
+            preconditionFailure("Enrollment was accepted without guardian consent")
+        } catch GrassrootsError.guardianConsentRequired(unknownGuardian) {
+        }
+    }
+
+    private static func grassrootsEnrollmentRespectsProgrammeAgeRange() throws {
+        var life = try makeDraft(
+            born: (2008, 8, 6),
+            starting: (2026, 8, 6)
+        ).create()
+        let programme = try makeProgramme()
+
+        do {
+            try life.enrollInGrassroots(
+                programme: programme,
+                consentedBy: PersonID(rawValue: "guardian-001")!
+            )
+            preconditionFailure("An adult was enrolled in a youth programme")
+        } catch GrassrootsError.ageOutsideProgrammeRange(
+            age: 18,
+            minimum: 8,
+            maximum: 15
+        ) {
+        }
+    }
+
+    private static func grassrootsSessionEnforcesSafeguarding() throws {
+        var life = try makeDraft(
+            born: (2015, 8, 6),
+            starting: (2026, 8, 6)
+        ).create()
+        let programme = try makeProgramme()
+        try life.enrollInGrassroots(
+            programme: programme,
+            consentedBy: PersonID(rawValue: "guardian-001")!
+        )
+
+        do {
+            try life.recordGrassrootsSession(
+                id: GrassrootsSessionID(rawValue: "session-001")!,
+                participantCount: 13,
+                screenedCoachCount: 2,
+                durationMinutes: 75,
+                safeguardingLeadPresent: false
+            )
+            preconditionFailure("A session without its safeguarding lead was accepted")
+        } catch GrassrootsError.safeguardingLeadRequired {
+        }
+
+        do {
+            try life.recordGrassrootsSession(
+                id: GrassrootsSessionID(rawValue: "session-002")!,
+                participantCount: 13,
+                screenedCoachCount: 1,
+                durationMinutes: 75,
+                safeguardingLeadPresent: true
+            )
+            preconditionFailure("A session with too few screened coaches was accepted")
+        } catch GrassrootsError.insufficientScreenedCoaches(
+            required: 2,
+            available: 1
+        ) {
+        }
+
+        do {
+            try life.recordGrassrootsSession(
+                id: GrassrootsSessionID(rawValue: "session-003")!,
+                participantCount: 25,
+                screenedCoachCount: 2,
+                durationMinutes: 75,
+                safeguardingLeadPresent: true
+            )
+            preconditionFailure("A session exceeded programme capacity")
+        } catch GrassrootsError.participantCountOutsideCapacity(25) {
+        }
+
+        do {
+            try life.recordGrassrootsSession(
+                id: GrassrootsSessionID(rawValue: "session-004")!,
+                participantCount: 12,
+                screenedCoachCount: 1,
+                durationMinutes: 20,
+                safeguardingLeadPresent: true
+            )
+            preconditionFailure("An unsafe session duration was accepted")
+        } catch GrassrootsError.invalidSessionDuration(20) {
+        }
+
+        let session = try life.recordGrassrootsSession(
+            id: GrassrootsSessionID(rawValue: "session-005")!,
+            participantCount: 13,
+            screenedCoachCount: 2,
+            durationMinutes: 75,
+            safeguardingLeadPresent: true
+        )
+        precondition(session.date == life.clock.currentDate)
+        precondition(life.grassrootsSessions == [session])
+    }
+
+    private static func grassrootsParticipationRoundTripsThroughJSON() throws {
+        var original = try makeDraft(
+            born: (2015, 8, 6),
+            starting: (2026, 8, 6)
+        ).create()
+        let programme = try makeProgramme()
+        let enrollment = try original.enrollInGrassroots(
+            programme: programme,
+            consentedBy: PersonID(rawValue: "guardian-001")!
+        )
+        try original.recordGrassrootsSession(
+            id: GrassrootsSessionID(rawValue: "session-001")!,
+            participantCount: 12,
+            screenedCoachCount: 1,
+            durationMinutes: 60,
+            safeguardingLeadPresent: true
+        )
+        try original.advance(by: 7)
+        try original.recordGrassrootsSession(
+            id: GrassrootsSessionID(rawValue: "session-002")!,
+            participantCount: 18,
+            screenedCoachCount: 2,
+            durationMinutes: 90,
+            safeguardingLeadPresent: true
+        )
+
+        let data = try JSONEncoder().encode(original)
+        let restored = try JSONDecoder().decode(NewLife.self, from: data)
+
+        precondition(restored == original)
+        precondition(restored.grassrootsEnrollment == enrollment)
+        precondition(restored.grassrootsSessions.count == 2)
+        precondition(restored.clock.elapsedDays == 7)
+    }
+
+    private static func makeProgramme() throws -> GrassrootsProgramme {
+        try GrassrootsProgrammeDraft(
+            id: GrassrootsProgrammeID(rawValue: "programme-001")!,
+            name: "Community Football",
+            activity: .communityTraining,
+            participantCapacity: 24,
+            screenedCoachCount: 2,
+            safeguarding: SafeguardingPolicy(
+                minimumParticipantAge: 8,
+                maximumParticipantAge: 15,
+                maxParticipantsPerScreenedCoach: 12
+            )
+        ).create()
     }
 
     private static func makePerson(born birth: (Int, Int, Int)) throws -> Person {
